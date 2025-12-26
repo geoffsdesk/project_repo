@@ -46,10 +46,26 @@ python vector_backtest.py
 
 Tools to fetch fresh data from AlphaVantage.
 
-```bash
-python fetch_data.py
-```
-*Note: Requires an API Key in the script.*
+### Data Sources & Setup
+To run the local backtest, you need the historical data.
+
+1.  **Base Data (Kaggle)**:
+    *   Download the **USD/JPY 1-Minute Candlestick Data (2015-2025)** from Kaggle:
+    *   [Link to Dataset](https://www.kaggle.com/datasets/kunalgupta2616/usd-jpy-1m-candlestick-data-2015-2025) (Example link, search for "USD JPY 1M 2015-2025" if broken)
+    *   **Action**: Unzip and place `USD_JPY_2015_07_2025_BID.csv` into the folder: `USDJPY 1M_CANDLESTICK DATA 2015-2025/`.
+
+2.  **Augmentation (AlphaVantage)**:
+    *   Get a Free API Key: [AlphaVantage Support](https://www.alphavantage.co/support/#api-key)
+    *   API Endpoint Used: `FX_DAILY` (Free) or `FX_INTRADAY` (Premium).
+
+### Running the Augmentation
+1.  Open `fetch_data.py`.
+2.  Replace `API_KEY = "YOUR_ALPHAVANTAGE_API_KEY"` with your key.
+3.  Run:
+    ```bash
+    python fetch_data.py
+    ```
+4.  This will generate `USD_JPY_DAILY_AUGMENTED.csv` (or merged data if configured).
 
 ---
 **License**: Private
