@@ -1,0 +1,22 @@
+# Data Files
+*.csv
+USDJPY 1M_CANDLESTICK DATA 2015-2025/
+
+# Visualization Artifacts
+*.html
+*.png
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+debug_output.txt

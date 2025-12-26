@@ -1,0 +1,6 @@
+backtesting
+pandas
+pandas_ta
+plotly
+requests
+python-dateutil

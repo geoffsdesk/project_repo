@@ -1,0 +1,276 @@
+//@version=6
+strategy("80% Value Area Rule Strategy v6", overlay=true, initial_capital=10000, default_qty_type=strategy.fixed, default_qty_value=10)
+
+// --- Inputs ---
+group_va   = "Value Area Settings"
+vaPercent  = input.float(70, "Value Area %", minval=0, maxval=100, group=group_va) / 100
+lookback   = input.int(1, "Lookback Days", group=group_va)
+res        = input.timeframe("30", "Acceptance Resolution", group=group_va)
+
+group_time = "Backtest Time Period"
+useDate    = input.bool(true, "Filter Date Range", group=group_time)
+startDate  = input.time(timestamp("2025-04-01 00:00"), "Start Date", group=group_time)
+endDate    = input.time(timestamp("2025-12-24 23:59"), "End Date", group=group_time)
+
+group_entry = "Entry Conditions"
+requireOpen = input.bool(false, "Require Open Outside VA?", group=group_entry, tooltip="If false, allows any move outside VA to trigger re-entry")
+
+group_risk = "Risk Management"
+slType     = input.string("ATR", "Stop Loss Type", options=["Fixed Ticks", "Percent", "ATR"], group=group_risk)
+slVal      = input.float(1.5, "Stop Loss Value (Tick/ % / ATR Mult)", group=group_risk)
+tpType     = input.string("Opposite VA", "Take Profit Type", options=["Opposite VA", "Fixed Ticks", "Percent", "ATR"], group=group_risk)
+tpVal      = input.float(2.0, "Take Profit Value (Tick/ % / ATR Mult)", group=group_risk)
+atrLen     = input.int(14, "ATR Length", group=group_risk)
+
+group_opt  = "Optimization Filters"
+minRR      = input.float(0.5, "Min Reward:Risk Ratio", minval=0.0, group=group_opt)
+useTrend   = input.bool(true, "Use EMA Trend Filter", group=group_opt)
+maLen      = input.int(200, "EMA Length", group=group_opt)
+trendMode  = input.string("Counter Trend", "Trend Mode", options=["With Trend", "Counter Trend"], group=group_opt)
+
+group_mgmt = "Trade Management (Time & Risk)"
+useSess    = input.bool(true, "Use Entry Session Filter", group=group_mgmt)
+sessTime   = input.session("0930-1500", "Entry Session (No entries after this)", group=group_mgmt)
+usePmExit  = input.bool(true, "PM Profit Secure (Close after 3PM if +PnL)", group=group_mgmt)
+pmExitTime = input.session("1500-1655", "PM Secure Window", group=group_mgmt)
+maxDaily   = input.float(1.0, "Max Daily Loss (% Equity)", group=group_mgmt)
+useTrail   = input.bool(true, "Use Trailing Stop", group=group_mgmt)
+trailAct   = input.float(1.0, "Trail Activation (%)", group=group_mgmt)
+trailOff   = input.float(0.5, "Trail Offset (%)", group=group_mgmt)
+
+// --- Variables ---
+// --- Variables to track Previous Day Data ---
+var float prevVAH   = na
+var float prevVAL   = na
+var float prevPOC   = na
+var float todayOpen = na
+
+// ATR
+atrVal = ta.atr(atrLen)
+
+// Detect New Day
+is_new_day = ta.change(time("D")) != 0
+
+if is_new_day
+    // Proxy calculation for Value Area (High-Low * 70% centered on POC)
+    float dHigh  = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+    float dLow   = request.security(syminfo.tickerid, "D", low[1], lookahead=barmerge.lookahead_on)
+    float dClose = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
+    
+    // Using priceRange to avoid the reserved keyword error
+    float priceRange = dHigh - dLow 
+    prevPOC   := (dHigh + dLow + dClose) / 3 
+    prevVAH   := prevPOC + (priceRange * vaPercent / 2)
+    prevVAL   := prevPOC - (priceRange * vaPercent / 2)
+    todayOpen := open
+
+// --- Data Preparation ---
+inDateRange = not useDate or (time >= startDate and time <= endDate)
+inSession   = not useSess or not na(time(timeframe.period, sessTime + ":1234567"))
+
+// EMA for Trend
+emaVal = ta.ema(close, maLen)
+// Trend Checks
+// Long: With Trend means Price > EMA. Counter means Price < EMA (oversold)
+trendLong  = not useTrend or (trendMode == "With Trend" ? close > emaVal : close < emaVal)
+// Short: With Trend means Price < EMA. Counter means Price > EMA (overbought)
+trendShort = not useTrend or (trendMode == "With Trend" ? close < emaVal : close > emaVal)
+
+// --- Logic for the 80% Rule ---
+hasData = not na(prevVAH)
+
+// Check if price WAS outside VA today (High > VAH or Low < VAL)
+// If requireOpen is true, strictly satisfy open > VAH.
+// If false, just check if high > VAH (Short) or low < VAL (Long) occurred.
+wasAbove = requireOpen ? todayOpen > prevVAH : high > prevVAH
+wasBelow = requireOpen ? todayOpen < prevVAL : low < prevVAL
+
+openAboveVA = hasData and wasAbove
+openBelowVA = hasData and wasBelow
+openOutside = openAboveVA or openBelowVA
+
+// Acceptance
+isInsideCurrent = close < prevVAH and close > prevVAL
+[isInside, isInsidePrev] = request.security(syminfo.tickerid, res, [isInsideCurrent, isInsideCurrent[1]], lookahead=barmerge.lookahead_off)
+accepted = isInside and isInsidePrev and openOutside
+
+// --- Risk:Reward Calculation (Pre-Entry) ---
+calcRR(isLong) =>
+    float entry = close
+    float sl = na
+    float tp = na
+    
+    // Calculate Stop Loss
+    if slType == "Fixed Ticks"
+        sl := isLong ? entry - slVal * syminfo.mintick : entry + slVal * syminfo.mintick
+    else if slType == "ATR"
+        sl := isLong ? entry - slVal * atrVal : entry + slVal * atrVal
+    else
+        sl := isLong ? entry * (1 - slVal / 100) : entry * (1 + slVal / 100)
+
+    // Calculate Take Profit
+    if tpType == "Opposite VA"
+        tp := isLong ? prevVAH : prevVAL 
+    else if tpType == "Fixed Ticks"
+        tp := isLong ? entry + tpVal * syminfo.mintick : entry - tpVal * syminfo.mintick
+    else if tpType == "ATR"
+        tp := isLong ? entry + tpVal * atrVal : entry - tpVal * atrVal
+    else 
+        tp := isLong ? entry * (1 + tpVal / 100) : entry * (1 - tpVal / 100)
+
+    // Distances
+    float risk = math.abs(entry - sl)
+    float reward = math.abs(entry - tp)
+    float ratio = risk > 0 ? reward / risk : 0
+    ratio
+
+// --- Strategy Execution ---
+
+// Entry: Short (Re-entering from Top / VAH)
+// Logic: Open Above -> Dipped Inside (Short) -> Targeting VAL
+// Wait, standard 80% rule: Open Above, Accept Inside, Target Low.
+// So we are Shorting when 'accepted' is true and 'openAboveVA'.
+canShort = accepted and openAboveVA and strategy.position_size == 0 and inDateRange and inSession and trendShort
+rrShort  = calcRR(false)
+if canShort and rrShort >= minRR
+    strategy.entry("80% Short", strategy.short, comment="RR: " + str.tostring(rrShort, "#.##"))
+
+// Entry: Long (Re-entering from Bottom / VAL)
+// Logic: Open Below -> Rose Inside (Long) -> Targeting VAH
+canLong = accepted and openBelowVA and strategy.position_size == 0 and inDateRange and inSession and trendLong
+rrLong  = calcRR(true)
+if canLong and rrLong >= minRR
+    strategy.entry("80% Long", strategy.long, comment="RR: " + str.tostring(rrLong, "#.##"))
+
+// --- Exits ---
+avgPrice = strategy.position_avg_price
+
+// Exit Logic with Trailing Stop
+// Pine Script strategy.exit handles trailing natively but needs offset in ticks or price
+// We have inputs in %. Convert % to Ticks for 'trail_offset' or use 'trail_price'.
+// It's cleaner to calculate price levels.
+
+// Helper to get ticks from percent
+pctToTicks(price, pct) =>
+    (price * pct / 100) / syminfo.mintick
+
+if strategy.position_size > 0 // Long
+    // Standard SL/TP calculation
+    float exitSL = na
+    float exitTP = na
+    
+    if slType == "Fixed Ticks"
+        exitSL := avgPrice - slVal * syminfo.mintick
+    else if slType == "ATR"
+        exitSL := avgPrice - slVal * atrVal
+    else 
+        exitSL := avgPrice * (1 - slVal / 100)
+    
+    if tpType == "Opposite VA"
+        exitTP := prevVAH
+    else if tpType == "Fixed Ticks"
+        exitTP := avgPrice + tpVal * syminfo.mintick
+    else if tpType == "ATR"
+        exitTP := avgPrice + tpVal * atrVal
+    else
+        exitTP := avgPrice * (1 + tpVal / 100)
+
+    // Trailing logic
+    // ... (Trailing logic remains same)
+    float t_activate = na
+    float t_offset   = na
+    
+    if useTrail
+        t_activate := pctToTicks(avgPrice, trailAct)
+        t_offset   := pctToTicks(avgPrice, trailOff)
+
+    strategy.exit("Exit Long", "80% Long", limit=exitTP, stop=exitSL, trail_points=t_activate, trail_offset=t_offset, comment_loss="SL", comment_profit="TP", comment_trailing="Trail")
+
+if strategy.position_size < 0 // Short
+    float exitSL = na
+    float exitTP = na
+
+    if slType == "Fixed Ticks"
+        exitSL := avgPrice + slVal * syminfo.mintick
+    else if slType == "ATR"
+        exitSL := avgPrice + slVal * atrVal
+    else
+        exitSL := avgPrice * (1 + slVal / 100)
+        
+    if tpType == "Opposite VA"
+        exitTP := prevVAL
+    else if tpType == "Fixed Ticks"
+        exitTP := avgPrice - tpVal * syminfo.mintick
+    else if tpType == "ATR"
+        exitTP := avgPrice - tpVal * atrVal
+    else 
+        exitTP := avgPrice * (1 - tpVal / 100)
+
+    // Trailing logic
+    float t_activate = na
+    float t_offset   = na
+    
+    if useTrail
+        t_activate := pctToTicks(avgPrice, trailAct)
+        t_offset   := pctToTicks(avgPrice, trailOff)
+
+    strategy.exit("Exit Short", "80% Short", limit=exitTP, stop=exitSL, trail_points=t_activate, trail_offset=t_offset, comment_loss="SL", comment_profit="TP", comment_trailing="Trail")
+
+// --- Risk Management (Daily Limit) ---
+strategy.risk.max_intraday_loss(maxDaily, strategy.percent_of_equity)
+
+// --- PM Profit Secure (Breakout/Profit Close after 3PM) ---
+// If time is > 15:00 and we are profitable or breakeven, close.
+isPmWindow = usePmExit and not na(time(timeframe.period, pmExitTime + ":1234567"))
+if isPmWindow and strategy.position_size != 0 and strategy.openprofit >= 0
+    strategy.close_all(comment="PM Secure (" + str.tostring(strategy.openprofit, "#.##") + ")")
+
+// --- Force Close at Session End ---
+// North American Close is typically 17:00 EST. We check for a window near close.
+forceClose   = input.bool(true, "Force Close at Session End?", group=group_mgmt)
+exitTimeSpec = input.session("1655-1700", "Exit Time Window", group=group_mgmt)
+
+if forceClose and not na(time(timeframe.period, exitTimeSpec + ":1234567"))
+    strategy.close_all(comment="Session Close")
+
+// --- Plotting ---
+p1 = plot(prevVAH, "VAH", color=color.new(color.green, 0), style=plot.style_stepline, linewidth=2)
+p2 = plot(prevVAL, "VAL", color=color.new(color.red, 0), style=plot.style_stepline, linewidth=2)
+plot(prevPOC, "POC", color=color.new(color.gray, 50), style=plot.style_stepline)
+fill(p1, p2, color=color.new(color.blue, 95), title="Value Area Background")
+
+// Plot EMA if trend filter active
+plot(useTrend ? emaVal : na, "Trend EMA", color=color.orange, linewidth=1)
+
+// Labels
+if accepted and not accepted[1] and inDateRange and inSession
+    // Check which type it would be to label correctly
+    // If openAbove -> Potential Short
+    string potentialParams = ""
+    bool filtersPass = true
+    
+    if openAboveVA 
+        float rr = calcRR(false)
+        bool tCheck = trendShort
+        potentialParams := "S | RR: " + str.tostring(rr, "#.1f")
+        if rr < minRR
+            filtersPass := false
+            potentialParams += " (LowRR)"
+        else if not tCheck
+            filtersPass := false
+            potentialParams += " (Trend)"
+
+    else if openBelowVA
+        float rr = calcRR(true)
+        bool tCheck = trendLong
+        potentialParams := "L | RR: " + str.tostring(rr, "#.1f")
+        if rr < minRR
+            filtersPass := false
+            potentialParams += " (LowRR)"
+        else if not tCheck
+            filtersPass := false
+            potentialParams += " (Trend)"
+
+    label.new(bar_index, high, "Accepted\n" + potentialParams, color = filtersPass ? color.blue : color.gray, textcolor=color.white, style=label.style_label_down, size=size.small)
+
+bgcolor(accepted ? color.new(color.blue, 90) : na)
