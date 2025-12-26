@@ -51,7 +51,7 @@ To run the local backtest, you need the historical data.
 
 1.  **Base Data (Kaggle)**:
     *   Download the **USD/JPY 1-Minute Candlestick Data (2015-2025)** from Kaggle:
-    *   [Link to Dataset](https://www.kaggle.com/datasets/kunalgupta2616/usd-jpy-1m-candlestick-data-2015-2025) (Example link, search for "USD JPY 1M 2015-2025" if broken)
+    *   [Link to Dataset](https://www.kaggle.com/datasets/gauravox/usdjpy-1-minute-forex-candlestick-data-20152025)
     *   **Action**: Unzip and place `USD_JPY_2015_07_2025_BID.csv` into the folder: `USDJPY 1M_CANDLESTICK DATA 2015-2025/`.
 
 2.  **Augmentation (AlphaVantage)**:
