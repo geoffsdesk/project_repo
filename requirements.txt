@@ -3,4 +3,4 @@ pandas_ta
 plotly
 requests
 python-dateutil
-pynesys-pynecore[cli]
+

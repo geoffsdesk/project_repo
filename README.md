@@ -8,7 +8,7 @@ This repository contains Value Area trading strategies for USD/JPY, including th
 - **`strategies/`**: Contains Python implementations and Pine Script versions of the strategies.
     - `rule_80.py` / `geoffs_strategy.pine`: The 80% Rule Strategy.
     - `jaro_v1.py` / `Jaro_v1.pine`: The Jaro V1 Momentum Strategy.
-    - `pyne_strategy_80.py`: **[NEW]** PyneCore implementation of the 80% Rule.
+
 - **`engine/`**: Core backtesting engine and database client.
 - **`data/`**: Stores the SQLite database (`trading_data.db`) and raw CSV data.
 - **`analyze_october.py`**: Example script for specific period analysis using the database.
@@ -57,18 +57,7 @@ python main.py --strategy 80_rule
 python main.py --strategy jaro_v1
 ```
 
-## 4. Running With PyneCore (Native Pine Support)
 
-This project now supports **PyneCore** (`pynesys-pynecore`), allowing you to run strategies written in Python syntax that mimics Pine Script 1:1.
-
-**Usage:**
-```bash
-# Run the 80% Rule using the PyneCore engine
-# Ensure you have data or use PyneCore's data fetcher
-pynecore run strategies/pyne_strategy_80.py --symbol USDJPY --timeframe 1D
-```
-
-This ensures your logic matches TradingView's execution model exactly.
 
 ## 5. Data Analysis
 
