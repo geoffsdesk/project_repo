@@ -2,7 +2,7 @@ import sqlite3
 import pandas as pd
 import os
 
-DB_NAME = "trading_data.db"
+DB_NAME = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "trading_data.db")
 
 def get_db_connection():
     conn = sqlite3.connect(DB_NAME)

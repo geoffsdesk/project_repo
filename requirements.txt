@@ -1,4 +1,3 @@
-backtesting
 pandas
 pandas_ta
 plotly

@@ -4,75 +4,86 @@ This repository contains Value Area trading strategies for USD/JPY, including th
 
 ## Project Structure
 
-- **`strategies/geoffs_strategy.pine`**: The 80% Rule Strategy (v7).
-- **`strategies/Jaro_v1.pine`**: The Jaro V1 Momentum Strategy.
-- **`vector_backtest.py`**: Fast local backtester supporting multiple strategies.
-- **`fetch_data.py`**: Utility to download fresh USD/JPY data from AlphaVantage.
+- **`main.py`**: The primary entry point for running backtests and initializing the database.
+- **`strategies/`**: Contains Python implementations and Pine Script versions of the strategies.
+    - `rule_80.py` / `geoffs_strategy.pine`: The 80% Rule Strategy.
+    - `jaro_v1.py` / `Jaro_v1.pine`: The Jaro V1 Momentum Strategy.
+- **`engine/`**: Core backtesting engine and database client.
+- **`data/`**: Stores the SQLite database (`trading_data.db`) and raw CSV data.
+- **`analyze_october.py`**: Example script for specific period analysis using the database.
 
 ## 1. Strategies
 
-### A. 80% Rule (`geoffs_strategy.pine`)
+### A. 80% Rule
 A mean-reversion strategy based on the 80% Rule logic with 70% Value Area.
-- **Key Features**: Trend filtering (200 EMA), 1% Max Daily Loss, Trailing Stop.
+- **Key Features**: Trend filtering, 1% Max Daily Loss, Trailing Stop.
 - **Default Parameter**: VA Percent = **70%**.
 
-### B. Jaro V1 (`Jaro_v1.pine`)
+### B. Jaro V1
 A momentum and re-entry focused strategy.
 - **Key Features**: 
     - **VA Percent**: **45%**.
-    - **Re-Entry Logic**: Enters on momentum breaks of the candle that triggered the first Take Profit.
-    - **Time Windows**: Entry before 3:00 PM EST, Hard Close at 4:45 PM EST.
+    - **Re-Entry Logic**: Enters on momentum breaks.
+    - **Time Windows**: Specific entry/exit windows (NY Session).
 
-## 2. Python Backtester (`vector_backtest.py`)
+## 2. Installation & Setup
 
-A high-performance local backtester that validates the strategy logic.
-
-### Usage
+1. **Install Dependencies**:
 ```bash
 pip install -r requirements.txt
 ```
 
-**Run the 80% Rule Strategy (Default):**
+2. **Initialize Database** (First time only):
+Before running backtests, you need to populate the local SQLite database from your CSV data source.
 ```bash
-python vector_backtest.py
-# OR explicitly:
-python vector_backtest.py --strategy 80_rule
+python main.py --init-db --csv-path "data/USD_JPY_DAILY_AUGMENTED.csv"
+```
+*Note: Ensure your CSV file follows standard OHLCV format.*
+
+## 3. Running Backtests
+
+Use `main.py` to run backtests. The system defaults to the 80% Rule strategy.
+
+**Run the 80% Rule Strategy:**
+```bash
+python main.py
+# OR
+python main.py --strategy 80_rule
 ```
 
 **Run the Jaro V1 Strategy:**
 ```bash
-python vector_backtest.py --strategy jaro_v1
+python main.py --strategy jaro_v1
+```
+
+### Custom Date Ranges
+You can specify custom start and end dates:
+```bash
+python main.py --strategy jaro_v1 --start 2024-01-01 --end 2024-12-31
 ```
 
 ### Output
-- Generates `backtest_chart_[strategy_name].html`: An interactive dashboard with:
-    -   **Price Chart**: Candlesticks + VAH/VAL logic.
-    -   **Equity Curve**: Visualizing account growth.
-    -   **Trade List**: Detailed table of every execution.
+- **Console**: Summary stats (Final Equity, Total Trades).
+- **Charts**: Generates `backtest_chart_[strategy_name].html`. Open this file in your browser to view:
+    - Interactive Price Chart with VAH/VAL.
+    - Equity Curve.
+    - Detailed Trade List table.
+- **Database**: Results are saved to the `backtest_runs` and `trades` tables in `trading_data.db`.
 
-## 3. Data & Backtesting Notes
-> [!IMPORTANT]
-> **Mixed Data Resolution**
-> The database contains a mix of resolutions:
-> *   **Jan 2015 – July 2025**: High-fidelity **1-Minute** Data (Source: Kaggle).
-> *   **Aug 2025 – Dec 2025**: **Daily** Data (Source: AlphaVantage Free Tier).
-> 
-> *Note: Backtesting over the late 2025 period uses Daily bars, so intraday stops/targets are approximated.*
+## 4. Data Analysis
 
-### Database
-The system now uses a SQLite database (`trading_data.db`) instead of raw CSVs for faster loading.
-*   The database is pre-populated with the 10-year dataset.
-*   **Performance**: For long backtests (e.g., 10 years), the charting engine automatically resamples price action to **4-Hour candles** to prevent browser crashes, while retaining precise trade markers.
+You can write custom scripts to analyze the data effortlessly using the `engine.db_client`.
 
-### Advanced Usage
-Run backtests on specific date ranges:
+**Example: `analyze_october.py`**
+This script fetches data for October 2025 from the DB and calculates volatility metrics.
 ```bash
-# Run Jaro V1 for the year 2024
-python vector_backtest.py --strategy jaro_v1 --start 2024-01-01 --end 2024-12-31
-
-# Run 80% Rule for Jan 2025
-python vector_backtest.py --strategy 80_rule --start 2025-01-01 --end 2025-01-31
+python analyze_october.py
 ```
+
+## 5. Notes
+> [!IMPORTANT]
+> **Data Resolution**
+> The system supports both minute and daily data. For long backtests (e.g., 10+ years), the visualization automatically resamples to **4-Hour candles** to improve performance, while the backtest logic runs on the highest resolution available.
 
 ---
 **License**: Private

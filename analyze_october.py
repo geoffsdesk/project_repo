@@ -1,17 +1,34 @@
 import pandas as pd
+from engine import db_client
 
-# Load the daily data
-df = pd.read_csv("USD_JPY_DAILY_AUGMENTED.csv", index_col='Date', parse_dates=True)
-df.sort_index(inplace=True) # Ensure monotonic increasing for slicing
-
-# Filter for October 2025
-oct_data = df['2025-10-01':'2025-10-31'].sort_index()
+# 1. Fetch Data from DB
+print("Fetching October 2025 data from DB...")
+# We fetch a bit more to handle indicators if needed, but for simple analysis specific range is fine
+try:
+    oct_data = db_client.get_market_data(start_date='2025-10-01', end_date='2025-10-31')
+except Exception as e:
+    print(f"Error fetching data: {e}")
+    exit(1)
 
 print(f"October 2025 Data Points: {len(oct_data)}")
 
 if len(oct_data) == 0:
     print("No data for October 2025.")
 else:
+    # Resample to daily if the data is minute-level (typical for this DB)
+    # Check resolution
+    time_diff = oct_data.index[1] - oct_data.index[0]
+    if time_diff.total_seconds() < 86400:
+        print("Resampling Minute data to Daily...")
+        daily_agg = {
+            'Open': 'first', 
+            'High': 'max', 
+            'Low': 'min', 
+            'Close': 'last', 
+            'Volume': 'sum'
+        }
+        oct_data = oct_data.resample('D').agg(daily_agg).dropna()
+
     start_price = oct_data['Open'].iloc[0]
     end_price = oct_data['Close'].iloc[-1]
     change = end_price - start_price
@@ -33,9 +50,6 @@ else:
     oct_data['Direction'] = oct_data['Close'] > oct_data['Open']
     print("\nDaily Direction (True=Green, False=Red):")
     print(oct_data['Direction'].value_counts())
-    
-    # Check for strong trend days (Close near High/Low)
-    # ...
     
     print("\nDaily Data:")
     print(oct_data[['Open', 'High', 'Low', 'Close']])
