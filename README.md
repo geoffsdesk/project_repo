@@ -59,7 +59,7 @@ python main.py --strategy jaro_v1
 
 ## 4. Running With PyneCore (Native Pine Support)
 
-This project now supports **PyneCore**, allowing you to run strategies written in Python syntax that mimics Pine Script 1:1.
+This project now supports **PyneCore** (`pynesys-pynecore`), allowing you to run strategies written in Python syntax that mimics Pine Script 1:1.
 
 **Usage:**
 ```bash
