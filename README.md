@@ -11,7 +11,7 @@ This repository contains Value Area trading strategies for USD/JPY, including th
 
 - **`engine/`**: Core backtesting engine and database client.
 - **`data/`**: Stores the SQLite database (`trading_data.db`) and raw CSV data.
-- **`analyze_october.py`**: Example script for specific period analysis using the database.
+- **`strategies/analyze_october.py`**: Example script for specific period analysis using the database.
 
 ## 1. Strategies
 
@@ -63,10 +63,10 @@ python main.py --strategy jaro_v1
 
 You can write custom scripts to analyze the data effortlessly using the `engine.db_client`.
 
-**Example: `analyze_october.py`**
+**Example: `strategies/analyze_october.py`**
 This script fetches data for October 2025 from the DB and calculates volatility metrics.
 ```bash
-python analyze_october.py
+python strategies/analyze_october.py
 ```
 
 ---
