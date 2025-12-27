@@ -20,3 +20,4 @@ env/
 # Logs
 *.log
 debug_output.txt
+*.db

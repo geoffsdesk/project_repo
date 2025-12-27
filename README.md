@@ -50,17 +50,29 @@ python vector_backtest.py --strategy jaro_v1
     -   **Equity Curve**: Visualizing account growth.
     -   **Trade List**: Detailed table of every execution.
 
-## 3. Data Setup
+## 3. Data & Backtesting Notes
+> [!IMPORTANT]
+> **Mixed Data Resolution**
+> The database contains a mix of resolutions:
+> *   **Jan 2015 – July 2025**: High-fidelity **1-Minute** Data (Source: Kaggle).
+> *   **Aug 2025 – Dec 2025**: **Daily** Data (Source: AlphaVantage Free Tier).
+> 
+> *Note: Backtesting over the late 2025 period uses Daily bars, so intraday stops/targets are approximated.*
 
-To run the local backtest, you need the historical data.
+### Database
+The system now uses a SQLite database (`trading_data.db`) instead of raw CSVs for faster loading.
+*   The database is pre-populated with the 10-year dataset.
+*   **Performance**: For long backtests (e.g., 10 years), the charting engine automatically resamples price action to **4-Hour candles** to prevent browser crashes, while retaining precise trade markers.
 
-1.  **Base Data (Kaggle)**:
-    *   Download the **USD/JPY 1-Minute Candlestick Data (2015-2025)** from Kaggle:
-    *   [Link to Dataset](https://www.kaggle.com/datasets/gauravox/usdjpy-1-minute-forex-candlestick-data-20152025)
-    *   **Action**: Unzip and place `USD_JPY_2015_07_2025_BID.csv` into the folder: `USDJPY 1M_CANDLESTICK DATA 2015-2025/`.
+### Advanced Usage
+Run backtests on specific date ranges:
+```bash
+# Run Jaro V1 for the year 2024
+python vector_backtest.py --strategy jaro_v1 --start 2024-01-01 --end 2024-12-31
 
-2.  **Augmentation (AlphaVantage) (Optional)**:
-    *   Use `fetch_data.py` to get fresh daily data.
+# Run 80% Rule for Jan 2025
+python vector_backtest.py --strategy 80_rule --start 2025-01-01 --end 2025-01-31
+```
 
 ---
 **License**: Private
