@@ -1,0 +1,96 @@
+//@version=6
+strategy("Dynamic VA Rule - Trend Re-entry", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10)
+
+// --- Inputs ---
+valueAreaPercent = input.float(45.0, "Value Area %", minval=0, maxval=100)
+vaPercent        = valueAreaPercent / 100
+timezone         = "America/New_York"
+
+// --- Variables ---
+var float prevVAH     = na
+var float prevVAL     = na
+var float prevPOC     = na
+var float todayOpen   = na
+var int   tradesToday = 0 
+var float tp_candle_level = na // Stores the H/L of the candle that triggered TP
+
+// Detect New Day
+is_new_day = ta.change(time("D", timezone)) != 0
+if is_new_day
+    float dHigh  = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+    float dLow   = request.security(syminfo.tickerid, "D", low[1], lookahead=barmerge.lookahead_on)
+    float dClose = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
+    
+    float priceRange = dHigh - dLow 
+    prevPOC     := (dHigh + dLow + dClose) / 3 
+    prevVAH     := prevPOC + (priceRange * vaPercent / 2)
+    prevVAL     := prevPOC - (priceRange * vaPercent / 2)
+    todayOpen   := open
+    tradesToday := 0 
+    tp_candle_level := na
+
+// --- Calculations ---
+float vaSpread    = prevVAH - prevVAL
+float longTarget  = prevVAL + (vaSpread * 0.75)
+float shortTarget = prevVAH - (vaSpread * 0.75)
+
+// --- Time Logic ---
+curr_time_total = hour(time, timezone) * 60 + minute(time, timezone)
+can_enter       = curr_time_total < 900  // 3:00 PM
+is_after_400pm  = curr_time_total >= 960 // 4:00 PM
+is_after_445pm  = curr_time_total >= 1005 // 4:45 PM
+
+// --- Acceptance Logic ---
+[isInside, isInsidePrev] = request.security(syminfo.tickerid, "30", [close < prevVAH and close > prevVAL, close[1] < prevVAH and close[1] > prevVAL])
+accepted = isInside and isInsidePrev
+
+// --- Strategy Execution ---
+
+// TRADE 1: Initial Entry
+if strategy.position_size == 0 and tradesToday == 0 and can_enter and accepted
+    if todayOpen > prevVAH
+        strategy.entry("T1 Short", strategy.short, comment="T1 VAH")
+        tradesToday := 1
+    if todayOpen < prevVAL
+        strategy.entry("T1 Long", strategy.long, comment="T1 VAL")
+        tradesToday := 1
+
+// CAPTURE TP MOMENTUM: Record the High/Low when Trade 1 closes
+if strategy.position_size[1] != 0 and strategy.position_size == 0 and tradesToday == 1
+    tp_candle_level := strategy.position_size[1] > 0 ? high : low
+
+// TRADE 2: Re-entry on Momentum (Break of the TP candle)
+if strategy.position_size == 0 and tradesToday == 1 and can_enter and not na(tp_candle_level)
+    // For Longs: If price breaks ABOVE the TP candle high
+    if todayOpen < prevVAL and close > tp_candle_level
+        strategy.entry("RE Long", strategy.long, comment="RE Momentum")
+        tradesToday := 2
+    // For Shorts: If price breaks BELOW the TP candle low
+    if todayOpen > prevVAH and close < tp_candle_level
+        strategy.entry("RE Short", strategy.short, comment="RE Momentum")
+        tradesToday := 2
+
+// --- Exits ---
+// Trade 1 Exit: 75% Target
+// Trade 2 Exit: Full 100% Target (Opposite side of VA)
+float exit_limit = (tradesToday == 2) ? (strategy.position_size > 0 ? prevVAH : prevVAL) : (strategy.position_size > 0 ? longTarget : shortTarget)
+
+if strategy.position_size > 0
+    strategy.exit("TP/SL Long", limit=exit_limit, stop=prevVAL - syminfo.mintick * 50, comment_profit=tradesToday == 2 ? "TP 100%" : "TP 75%")
+if strategy.position_size < 0
+    strategy.exit("TP/SL Short", limit=exit_limit, stop=prevVAH + syminfo.mintick * 50, comment_profit=tradesToday == 2 ? "TP 100%" : "TP 75%")
+
+// --- EOD Logic ---
+if strategy.position_size != 0
+    if is_after_400pm and strategy.openprofit > 0
+        strategy.close_all(comment="EOD Profit Flush")
+    else if is_after_445pm
+        strategy.close_all(comment="EOD Risk Cut")
+
+// --- Plotting ---
+plot(prevVAH, "VAH", color=color.new(color.green, 0), style=plot.style_stepline, linewidth=2)
+plot(prevVAL, "VAL", color=color.new(color.red, 0), style=plot.style_stepline, linewidth=2)
+plot(prevPOC, "POC", color=color.new(color.orange, 50), style=plot.style_stepline, linewidth=1)
+plot(tp_candle_level, "TP Candle Level", color=color.new(color.gray, 30), style=plot.style_linebr)
+
+bgcolor(accepted ? color.new(color.blue, 90) : na)

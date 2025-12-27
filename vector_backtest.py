@@ -5,10 +5,10 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import webbrowser
 import os
+import argparse
 
 # --- Configuration ---
 DATA_PATH = r"C:\Users\geoff\.gemini\antigravity\scratch\project_repo\USDJPY 1M_CANDLESTICK DATA 2015-2025\USD_JPY_2015_07_2025_BID.csv"
-VA_PERCENT = 0.70
 INITIAL_CAPITAL = 10000
 POSITION_SIZE = 1000  # Units
 LEVERAGE = 50
@@ -16,8 +16,8 @@ SL_TICKS = 50
 TP_TICKS = 100 
 USE_OPPOSITE_VA_TP = True
 
-def preprocess_data(filepath):
-    print("Loading data...")
+def preprocess_data(filepath, va_percent=0.70):
+    print(f"Loading data with VA Percent: {va_percent}...")
     df = pd.read_csv(filepath)
     df.columns = df.columns.str.strip()
     
@@ -25,13 +25,24 @@ def preprocess_data(filepath):
     # Use coerce to handle any errors, assuming mostly valid
     df['timestamp'] = pd.to_datetime(df['timestamp'], dayfirst=True, utc=True, errors='coerce')
     df.set_index('timestamp', inplace=True)
+    
+    # We will keep the index as UTC for now, but for Jaro we might need NY time conversion
+    # df.index = df.index.tz_localize(None) 
+    # ^ Removing this to keep it aware, or we can strip after conversion. 
+    # Let's strip to be consistent with previous logic but remember it's UTC.
     df.index = df.index.tz_localize(None)
+    
     df.index.name = 'Date'
     df = df[~df.index.duplicated(keep='first')]
     
     # Cast
     cols = ['Open', 'High', 'Low', 'Close', 'volume']
-    df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+    # Handle casing if 'volume' is lowercase in CSV
+    df_cols_map = {c: c for c in df.columns}
+    if 'volume' in df_cols_map and 'Volume' not in df_cols_map:
+        df.rename(columns={'volume': 'Volume'}, inplace=True)
+        
+    df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
     for c in df.columns:
         df[c] = pd.to_numeric(df[c], errors='coerce')
     df.dropna(inplace=True)
@@ -42,8 +53,8 @@ def preprocess_data(filepath):
     daily = df.resample('D').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last'}).dropna()
     daily['POC'] = (daily['High'] + daily['Low'] + daily['Close'])/3
     daily['Range'] = daily['High'] - daily['Low']
-    daily['VAH'] = daily['POC'] + (daily['Range']*VA_PERCENT/2)
-    daily['VAL'] = daily['POC'] - (daily['Range']*VA_PERCENT/2)
+    daily['VAH'] = daily['POC'] + (daily['Range']*va_percent/2)
+    daily['VAL'] = daily['POC'] - (daily['Range']*va_percent/2)
     daily['PrevVAH'] = daily['VAH'].shift(1)
     daily['PrevVAL'] = daily['VAL'].shift(1)
     daily['DateOnly'] = daily.index.date
@@ -89,11 +100,8 @@ def preprocess_data(filepath):
     df.dropna(subset=['PrevVAH', 'TodayOpen'], inplace=True)
     return df
 
-def run_backtest(df):
-    print("Running Loop...")
-    # Iterate
-    # Iterate
-    # Status: 'flat', 'long', 'short'
+def run_strategy_80_rule(df):
+    print("Running Strategy: 80% Rule...")
     status = 'flat'
     entry_price = 0.0
     sl = 0.0
@@ -103,7 +111,6 @@ def run_backtest(df):
     equity = INITIAL_CAPITAL
     
     # Arrays for speed
-    opens = df.Open.values
     highs = df.High.values
     lows = df.Low.values
     closes = df.Close.values
@@ -125,7 +132,7 @@ def run_backtest(df):
             # Check Low for SL, High for TP
             if lows[i] <= sl:
                 # SL Hit
-                exit_price = sl # Slippage? Assume limit
+                exit_price = sl 
                 pnl = (exit_price - entry_price) * POSITION_SIZE
                 equity += pnl
                 trades.append({'EntryTime': entry_time, 'ExitTime': times[i], 'Type': 'Long', 'Entry': entry_price, 'Exit': exit_price, 'PnL': pnl, 'Reason': 'SL'})
@@ -156,10 +163,7 @@ def run_backtest(df):
         
         # Check Entry
         if status == 'flat':
-            # Criteria
-            # Accepted
             if accepted[i]:
-                # Open Above VA?
                 is_above = today_open[i] > prev_vah[i]
                 is_below = today_open[i] < prev_val[i]
                 
@@ -178,14 +182,198 @@ def run_backtest(df):
                     tp = prev_vah[i] if USE_OPPOSITE_VA_TP else price + TP_TICKS * 0.001
                     status = 'long'
                     
-    return equity, trades
+    return equity, trades, "80% Rule"
 
-def plot_results(df, trades):
-    print("Generating Chart...")
+def run_strategy_jaro_v1(df):
+    print("Running Strategy: Jaro V1...")
+    
+    # --- Jaro V1 Logic ---
+    # VA Percent is 45% (Handled in preprocess)
+    
+    # Time Conversion for Logic
+    # Data is UTC. New York is what we need.
+    # We need to construct a NY time array for filtering.
+    # To avoid heavy lifting inside the loop, we pre-calculate time of day minutes in NY.
+    
+    # Assuming df.index is Naive UTC.
+    # Localize to UTC then Convert to NY
+    ts_utc = df.index.tz_localize('UTC')
+    ts_ny = ts_utc.tz_convert('America/New_York')
+    
+    # Calculate Minutes from Midnight for each bar
+    minutes_from_midnight = ts_ny.hour * 60 + ts_ny.minute
+    minutes_from_midnight = minutes_from_midnight.values # Numpy array
+    
+    # Logic Constants
+    TIME_ENTRY_Limit = 900  # 15:00 (3:00 PM)
+    TIME_EOD_FLUSH = 960    # 16:00 (4:00 PM)
+    TIME_HARD_CLOSE = 1005  # 16:45 (4:45 PM)
+    
+    # State Variables
+    status = 'flat' # 'flat', 'long', 'short'
+    trades_today = 0
+    tp_candle_level = np.nan
+    
+    entry_price = 0.0
+    sl = 0.0
+    tp = 0.0 # Exit limit
+    
+    trades = []
+    equity = INITIAL_CAPITAL
+    
+    # Pre-calculate Day changes to reset counters
+    # shift(1) of date != date
+    dates = df.index.date
+    # Day change detection
+    day_indices = np.where(dates[1:] != dates[:-1])[0] + 1
+    day_change_mask = np.zeros(len(df), dtype=bool)
+    day_change_mask[day_indices] = True
+    
+    # Arrays
+    opens = df.Open.values
+    highs = df.High.values
+    lows = df.Low.values
+    closes = df.Close.values
+    times = df.index
+    
+    prev_vah = df.PrevVAH.values
+    prev_val = df.PrevVAL.values
+    today_open = df.TodayOpen.values
+    accepted = df.Accepted.values
+    
+    # Calculate VA Spread for Targets
+    va_spread = prev_vah - prev_val
+    long_target_t1 = prev_val + (va_spread * 0.75)
+    short_target_t1 = prev_vah - (va_spread * 0.75)
+    
+    n = len(df)
+    entry_time = None
+    
+    for i in range(n):
+        # 1. New Day Reset
+        if day_change_mask[i]:
+            trades_today = 0
+            tp_candle_level = np.nan
+            if status != 'flat':
+                # Force close at open of new day if still open? 
+                # Strategy says EOD Close at 16:45. 
+                # If we missed it, close now.
+                pass 
+                
+        current_minutes = minutes_from_midnight[i]
+        price = closes[i]
+        
+        # 2. Exits & EOD
+        if status != 'flat':
+            # EOD Logic
+            if current_minutes >= TIME_HARD_CLOSE:
+                # Force Close
+                 pnl = (price - entry_price) * POSITION_SIZE if status == 'long' else (entry_price - price) * POSITION_SIZE
+                 equity += pnl
+                 trades.append({'EntryTime': entry_time, 'ExitTime': times[i], 'Type': status.capitalize(), 'Entry': entry_price, 'Exit': price, 'PnL': pnl, 'Reason': 'EOD Risk Cut'})
+                 status = 'flat'
+                 
+            elif current_minutes >= TIME_EOD_FLUSH:
+                # Check for open profit
+                open_pnl = (price - entry_price) * POSITION_SIZE if status == 'long' else (entry_price - price) * POSITION_SIZE
+                if open_pnl > 0:
+                    equity += open_pnl
+                    trades.append({'EntryTime': entry_time, 'ExitTime': times[i], 'Type': status.capitalize(), 'Entry': entry_price, 'Exit': price, 'PnL': open_pnl, 'Reason': 'EOD Profit Flush'})
+                    status = 'flat'
+            
+            # Normal TP/SL Logic (if still open)
+            if status == 'long':
+                if lows[i] <= sl:
+                    exit_price = sl
+                    pnl = (exit_price - entry_price) * POSITION_SIZE
+                    equity += pnl
+                    trades.append({'EntryTime': entry_time, 'ExitTime': times[i], 'Type': 'Long', 'Entry': entry_price, 'Exit': exit_price, 'PnL': pnl, 'Reason': 'SL'})
+                    status = 'flat'
+                elif highs[i] >= tp:
+                    exit_price = tp
+                    pnl = (exit_price - entry_price) * POSITION_SIZE
+                    equity += pnl
+                    trades.append({'EntryTime': entry_time, 'ExitTime': times[i], 'Type': 'Long', 'Entry': entry_price, 'Exit': exit_price, 'PnL': pnl, 'Reason': 'TP'})
+                    status = 'flat'
+                    # Capture Momentum Level
+                    if trades_today == 1:
+                        tp_candle_level = highs[i] # Trade 1 Long TP -> High
+
+            elif status == 'short':
+                if highs[i] >= sl:
+                    exit_price = sl
+                    pnl = (entry_price - exit_price) * POSITION_SIZE
+                    equity += pnl
+                    trades.append({'EntryTime': entry_time, 'ExitTime': times[i], 'Type': 'Short', 'Entry': entry_price, 'Exit': exit_price, 'PnL': pnl, 'Reason': 'SL'})
+                    status = 'flat'
+                elif lows[i] <= tp:
+                    exit_price = tp
+                    pnl = (entry_price - exit_price) * POSITION_SIZE
+                    equity += pnl
+                    trades.append({'EntryTime': entry_time, 'ExitTime': times[i], 'Type': 'Short', 'Entry': entry_price, 'Exit': exit_price, 'PnL': pnl, 'Reason': 'TP'})
+                    status = 'flat'
+                    # Capture Momentum Level
+                    if trades_today == 1:
+                        tp_candle_level = lows[i] # Trade 1 Short TP -> Low
+                        
+        # 3. Entries
+        can_enter = current_minutes < TIME_ENTRY_Limit
+        
+        if status == 'flat' and can_enter:
+            
+            # TRADE 1: Initial
+            if trades_today == 0 and accepted[i]:
+                # Short
+                if today_open[i] > prev_vah[i]:
+                    status = 'short'
+                    entry_price = price
+                    entry_time = times[i]
+                    # SL/TP
+                    sl = prev_vah[i] + SL_TICKS * 0.001 # Strategy: stop=prevVAH + 50 ticks (approx 0.050 or 0.50? JPY 0.01 is pip. 50*0.001 = 0.05)
+                    # wait, syminfo.mintick * 50. JPY mintick is 0.001. So 50 * 0.001 = 0.05.
+                    tp = short_target_t1[i]
+                    trades_today = 1
+                
+                # Long
+                elif today_open[i] < prev_val[i]:
+                    status = 'long'
+                    entry_price = price
+                    entry_time = times[i]
+                    sl = prev_val[i] - SL_TICKS * 0.001
+                    tp = long_target_t1[i]
+                    trades_today = 1
+                    
+            # TRADE 2: Re-entry
+            elif trades_today == 1 and not np.isnan(tp_candle_level):
+                # Long Re-entry
+                # If price breaks ABOVE the TP candle high (tp_candle_level)
+                # And todayOpen < prevVAL (Context)
+                if today_open[i] < prev_val[i] and price > tp_candle_level:
+                     status = 'long'
+                     entry_price = price
+                     entry_time = times[i]
+                     sl = prev_val[i] - SL_TICKS * 0.001
+                     tp = prev_vah[i] # Target: Opposite VA
+                     trades_today = 2
+                
+                # Short Re-entry
+                # If price breaks BELOW the TP candle low
+                # And todayOpen > prevVAH
+                elif today_open[i] > prev_vah[i] and price < tp_candle_level:
+                    status = 'short'
+                    entry_price = price
+                    entry_time = times[i]
+                    sl = prev_vah[i] + SL_TICKS * 0.001
+                    tp = prev_val[i] # Target: Opposite VA
+                    trades_today = 2
+
+    return equity, trades, "Jaro V1"
+
+def plot_results(df, trades, strategy_name):
+    print(f"Generating Chart for {strategy_name}...")
     
     # --- Metrics Calculation ---
     df_trades = pd.DataFrame(trades)
-    equity_curve = []
     
     if len(trades) > 0:
         df_trades.sort_values('ExitTime', inplace=True)
@@ -197,7 +385,6 @@ def plot_results(df, trades):
         drawdown = running_peak - df_trades['Equity']
         drawdown_pct = (drawdown / running_peak) * 100
         max_dd_pct = drawdown_pct.max()
-        max_dd_val = drawdown.max()
         
         # Stats
         total_pnl = df_trades['PnL'].sum()
@@ -210,8 +397,6 @@ def plot_results(df, trades):
         win_rate = (len(wins) / len(df_trades)) * 100
         total_trades = len(df_trades)
         
-        # Prepare Equity Curve Data (Start + Exits)
-        # We add the start point
         eq_dates = [df.index[0]] + df_trades['ExitTime'].tolist()
         eq_values = [INITIAL_CAPITAL] + df_trades['Equity'].tolist()
     else:
@@ -231,7 +416,7 @@ def plot_results(df, trades):
         vertical_spacing=0.03, 
         row_heights=[0.5, 0.2, 0.3],
         specs=[[{"type": "xy"}], [{"type": "xy"}], [{"type": "table"}]],
-        subplot_titles=('Price Action', 'Equity Curve', 'Trade List')
+        subplot_titles=(f'Price Action ({strategy_name})', 'Equity Curve', 'Trade List')
     )
     
     # 1. Price Candle
@@ -258,7 +443,7 @@ def plot_results(df, trades):
         
         exits_t = [t['ExitTime'] for t in trades]
         exits_p = [t['Exit'] for t in trades]
-        pnl_text = [f"PnL: {t['PnL']:.2f}" for t in trades]
+        pnl_text = [f"PnL: {t['PnL']:.2f}<br>{t['Reason']}" for t in trades]
         
         if long_entries_t:
             fig.add_trace(go.Scatter(
@@ -282,7 +467,7 @@ def plot_results(df, trades):
                 name='Exit'
             ), row=1, col=1)
 
-    # 4. Equity Curve (Row 2)
+    # 4. Equity Curve
     fig.add_trace(go.Scatter(
         x=eq_dates, y=eq_values,
         mode='lines', 
@@ -291,32 +476,30 @@ def plot_results(df, trades):
         fill='tozeroy'
     ), row=2, col=1)
     
-    # 5. Trade Table (Row 3)
+    # 5. Trade Table
     if len(trades) > 0:
-        # Format for table
         t_entry_time = [t['EntryTime'].strftime('%Y-%m-%d %H:%M') for t in trades]
         t_type = [t['Type'] for t in trades]
         t_entry_p = [f"{t['Entry']:.3f}" for t in trades]
+        t_reason = [t['Reason'] for t in trades]
         t_exit_time = [t['ExitTime'].strftime('%Y-%m-%d %H:%M') for t in trades]
         t_exit_p = [f"{t['Exit']:.3f}" for t in trades]
         t_pnl = [f"{t['PnL']:.2f}" for t in trades]
-        t_reason = [t['Reason'] for t in trades]
         
-        # Color PnL
         fill_colors = ['palegreen' if t['PnL'] > 0 else 'lightpink' for t in trades]
         
         fig.add_trace(go.Table(
             header=dict(
-                values=['Entry Time', 'Type', 'Entry Price', 'Exit Time', 'Exit Price', 'PnL', 'Reason'],
+                values=['Entry Time', 'Type', 'Reason', 'Entry Price', 'Exit Time', 'Exit Price', 'PnL'],
                 fill_color='grey',
                 align='left',
                 font=dict(color='white')
             ),
             cells=dict(
-                values=[t_entry_time, t_type, t_entry_p, t_exit_time, t_exit_p, t_pnl, t_reason],
-                fill_color=[['black']*len(trades), ['black']*len(trades), ['black']*len(trades), ['black']*len(trades), ['black']*len(trades), fill_colors, ['black']*len(trades)],
+                values=[t_entry_time, t_type, t_reason, t_entry_p, t_exit_time, t_exit_p, t_pnl],
+                fill_color=[['black']*len(trades), ['black']*len(trades), ['black']*len(trades), ['black']*len(trades), ['black']*len(trades), ['black']*len(trades), fill_colors],
                 align='left',
-                font=dict(color=['white', 'white', 'white', 'white', 'white', 'black', 'white'])
+                font=dict(color=['white', 'white', 'white', 'white', 'white', 'white', 'black'])
             )
         ), row=3, col=1)
 
@@ -329,22 +512,31 @@ def plot_results(df, trades):
     )
     
     fig.update_layout(
-        title=dict(text=f'Backtest Results (80% Rule)<br><sup>{stats_text}</sup>', x=0.5),
+        title=dict(text=f'Backtest Results: {strategy_name}<br><sup>{stats_text}</sup>', x=0.5),
         yaxis_title='USD/JPY',
         yaxis2_title='Equity ($)',
         xaxis_rangeslider_visible=False,
         template='plotly_dark',
-        height=1000  # Increased height for table
+        height=1000
     )
     
-    # Save and Open
-    filename = "backtest_chart.html"
+    filename = f"backtest_chart_{strategy_name.replace(' ', '_')}.html"
     fig.write_html(filename)
     print(f"Chart saved to {filename}")
     webbrowser.open('file://' + os.path.realpath(filename))
 
 if __name__ == "__main__":
-    df = preprocess_data(DATA_PATH)
+    parser = argparse.ArgumentParser(description='Run Vector Backtest')
+    parser.add_argument('--strategy', type=str, default='80_rule', choices=['80_rule', 'jaro_v1'], help='Strategy to run (default: 80_rule)')
+    args = parser.parse_args()
+    
+    # Determine VA Percent based on Strategy
+    if args.strategy == 'jaro_v1':
+        va_p = 0.45
+    else:
+        va_p = 0.70
+        
+    df = preprocess_data(DATA_PATH, va_percent=va_p)
     
     # Filter Date
     start_date = "2025-04-01"
@@ -353,7 +545,12 @@ if __name__ == "__main__":
     subset = df.loc[mask]
     
     print(f"Test Rows: {len(subset)}")
-    final_equity, trade_list = run_backtest(subset)
+    print(f"Strategy Selected: {args.strategy}")
+    
+    if args.strategy == 'jaro_v1':
+        final_equity, trade_list, strat_name = run_strategy_jaro_v1(subset)
+    else:
+        final_equity, trade_list, strat_name = run_strategy_80_rule(subset)
     
     print(f"Final Equity: {final_equity:.2f}")
     print(f"Total Trades: {len(trade_list)}")
@@ -364,5 +561,4 @@ if __name__ == "__main__":
         print("\nPnL Stats:")
         print(trades_df.PnL.describe())
         
-        # Plot
-        plot_results(subset, trade_list)
+        plot_results(subset, trade_list, strat_name)

@@ -1,30 +1,27 @@
 # 80% Value Area Rule Strategy (USD/JPY)
 
-This repository contains the Pine Script strategy and Python backtesting tools for the "80% Value Area Rule" on USD/JPY.
+This repository contains Value Area trading strategies for USD/JPY, including the classic '80% Rule' and the new momentum-based 'Jaro V1'.
 
 ## Project Structure
 
-- **`strategies/geoffs_strategy.pine`**: The core TradingView Strategy (v7).
-- **`vector_backtest.py`**: Fast local backtester using Pandas and Plotly (Generates `backtest_chart.html`).
+- **`strategies/geoffs_strategy.pine`**: The 80% Rule Strategy (v7).
+- **`strategies/Jaro_v1.pine`**: The Jaro V1 Momentum Strategy.
+- **`vector_backtest.py`**: Fast local backtester supporting multiple strategies.
 - **`fetch_data.py`**: Utility to download fresh USD/JPY data from AlphaVantage.
-- **`analyze_october.py`**: Script used to analyze market conditions (Trend vs Range).
 
-## 1. Pine Script Strategy (`geoffs_strategy.pine`)
+## 1. Strategies
 
-A mean-reversion strategy based on the 80% Rule.
+### A. 80% Rule (`geoffs_strategy.pine`)
+A mean-reversion strategy based on the 80% Rule logic with 70% Value Area.
+- **Key Features**: Trend filtering (200 EMA), 1% Max Daily Loss, Trailing Stop.
+- **Default Parameter**: VA Percent = **70%**.
 
-### Key Features (v7)
-- **Trend Filter**: Uses 200 EMA to avoid fighting strong trends. (Default: **Counter Trend** mode).
-- **Risk Management**:
-    - **Circuit Breaker**: Stops trading if Max Daily Loss hits **1%**.
-    - **Trailing Stop**: Locks in profits during volatility.
-    - **Force Close**: Closes all positions at 16:55 (Session End).
-- **Time Constraints**: Trading Window **09:30 - 15:00**. PM Profit Secure closes winners after 3 PM.
-
-### Setup
-1. Copy content of `strategies/geoffs_strategy.pine`.
-2. Paste into TradingView Pine Editor.
-3. Recommended Timeframe: **30 Minute**.
+### B. Jaro V1 (`Jaro_v1.pine`)
+A momentum and re-entry focused strategy.
+- **Key Features**: 
+    - **VA Percent**: **45%**.
+    - **Re-Entry Logic**: Enters on momentum breaks of the candle that triggered the first Take Profit.
+    - **Time Windows**: Entry before 3:00 PM EST, Hard Close at 4:45 PM EST.
 
 ## 2. Python Backtester (`vector_backtest.py`)
 
@@ -33,20 +30,28 @@ A high-performance local backtester that validates the strategy logic.
 ### Usage
 ```bash
 pip install -r requirements.txt
+```
+
+**Run the 80% Rule Strategy (Default):**
+```bash
 python vector_backtest.py
+# OR explicitly:
+python vector_backtest.py --strategy 80_rule
+```
+
+**Run the Jaro V1 Strategy:**
+```bash
+python vector_backtest.py --strategy jaro_v1
 ```
 
 ### Output
-- Generates `backtest_chart.html`: An interactive dashboard with:
+- Generates `backtest_chart_[strategy_name].html`: An interactive dashboard with:
     -   **Price Chart**: Candlesticks + VAH/VAL logic.
     -   **Equity Curve**: Visualizing account growth.
     -   **Trade List**: Detailed table of every execution.
 
-## 3. Data Augmentation (`fetch_data.py`)
+## 3. Data Setup
 
-Tools to fetch fresh data from AlphaVantage.
-
-### Data Sources & Setup
 To run the local backtest, you need the historical data.
 
 1.  **Base Data (Kaggle)**:
@@ -54,18 +59,8 @@ To run the local backtest, you need the historical data.
     *   [Link to Dataset](https://www.kaggle.com/datasets/gauravox/usdjpy-1-minute-forex-candlestick-data-20152025)
     *   **Action**: Unzip and place `USD_JPY_2015_07_2025_BID.csv` into the folder: `USDJPY 1M_CANDLESTICK DATA 2015-2025/`.
 
-2.  **Augmentation (AlphaVantage)**:
-    *   Get a Free API Key: [AlphaVantage Support](https://www.alphavantage.co/support/#api-key)
-    *   API Endpoint Used: `FX_DAILY` (Free) or `FX_INTRADAY` (Premium).
-
-### Running the Augmentation
-1.  Open `fetch_data.py`.
-2.  Replace `API_KEY = "YOUR_ALPHAVANTAGE_API_KEY"` with your key.
-3.  Run:
-    ```bash
-    python fetch_data.py
-    ```
-4.  This will generate `USD_JPY_DAILY_AUGMENTED.csv` (or merged data if configured).
+2.  **Augmentation (AlphaVantage) (Optional)**:
+    *   Use `fetch_data.py` to get fresh daily data.
 
 ---
 **License**: Private
